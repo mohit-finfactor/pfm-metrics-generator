@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+    <head>
+        <title th:remove="all">Template for HTML email</title>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
+        <style>
+        table, th, td{
+            border: 1px solid black;
+            border-collapse: collapse;
+            }
+            th, td {
+                padding: 1rem;
+            }
+            td{
+                text-align: center;
+            }
+        </style>
+    </head>
+    <body>
+        <p>
+            Hello,
+        </p>
+        <p>
+            Please find below the PFM metrics along with their values, calculated for <b> <span th:text="${calculatedDate}"></span> </b>
+        </p>
+        <p>
+
+        </p>
+        <table>
+            <thead>
+                <tr>
+                    <th>Metric Name</th>
+                    <th>Total</th>
+                    <th>Yesterday</th>
+                    <th>MTD</th>
+                    <th>FYTD</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr th:each="metric : ${#ctx.dailyMetricsTableData}">
+                    <td th:text="${metric.key}"></td>
+                    <td th:text="${metric.value[0]}"></td>
+                    <td th:text="${metric.value[1]}"></td>
+                    <td th:text="${metric.value[3]}"></td>
+                    <td th:text="${metric.value[2]}"></td>
+                </tr>
+            </tbody>
+        </table>
+        <p>
+            Regards, <br/>
+            <em>The Finfactor Team</em>
+        </p>
+    </body>
+</html>
