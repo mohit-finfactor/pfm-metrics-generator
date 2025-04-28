@@ -2,13 +2,16 @@ package com.example.demo;
 
 import com.ctpl.finvu.common.consent.model.ConsentsRequestConsentDetail.FiTypesEnum;
 import com.example.demo.common.*;
+import com.ftpl.pfm.common.enums.ConsentSessionStatus;
 import com.ftpl.pfm.common.enums.ConsentStatus;
 import com.ftpl.pfm.common.model.accounts.AccountLinkStatus;
 import com.ftpl.pfm.common.model.customer.SubscriptionStatusDao;
 import com.ftpl.pfm.common.model.statistics.StatisticsTable;
+import jakarta.annotation.PostConstruct;
 import jakarta.mail.internet.MimeMessage;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
@@ -22,18 +25,20 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.time.*;
 import java.util.*;
+import java.util.stream.Collectors;
 
 import static com.example.demo.dashboard.MetricsName.*;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class PfmDashboardService implements CommandLineRunner {
+public class PfmDashboardService {
 
     private static final String DEPOSITS = FiTypesEnum.DEPOSIT.toString();
     private static final String MUTUAL_FUNDS = FiTypesEnum.MUTUAL_FUNDS.toString();
     private static final String EQUITIES = FiTypesEnum.EQUITIES.toString();
     public static final String ASIA_KOLKATA = "Asia/Kolkata";
+    private static final String TOTAL = "Total";
 
     private final CustomerAccountRepository customerAccountRepository;
     private final CustomerConsentRepository customerConsentRepository;
@@ -41,10 +46,24 @@ public class PfmDashboardService implements CommandLineRunner {
     private final CustomerConsentHandleRepository customerConsentHandleRepository;
     private final JavaMailSender emailSender;
     private final ThymeleafTemplateConfig thymeleafTemplateConfig;
+    private final CustomerConsentSessionRepository customerConsentSessionRepository;
 
+    @Value("${job.start-date:2024-04-01}")
     private LocalDate startDate;
+
+    @Value("${job.end-date:2024-04-27}")
     private LocalDate endDate;
 
+    @Value("${email.from}")
+    private String fromAddress;
+
+    @Value("${email.to}")
+    private String[] toAddresses;
+
+    @Value("${email.subject}")
+    private String subject;
+
+    @PostConstruct
     public void init() {
         if (startDate == null || endDate == null) {
             final LocalDate defaultDate = LocalDate.now(ZoneId.of("UTC"));
@@ -68,8 +87,40 @@ public class PfmDashboardService implements CommandLineRunner {
                     .sorted(Comparator.comparing(StatisticsTable::getMetricName))
                     .toList();
             final SortedMap<String, List<String>> dashboardMetricsList = fetchDashboardMetrics(sortedList);
-            sendEmail(dashboardMetricsList, date);
+
+            log.trace("fetching success rate metrics");
+            final SortedMap<String, List<String>> totalRowForSuccessRateMetrics = new TreeMap<>();
+            final SortedMap<String, List<String>> successRateMetrics = fetchSuccessRateMetrics(totalRowForSuccessRateMetrics, date);
+
+            log.trace("fetching account id count");
+            final HashMap<String, String> totalRowForAccountIdCount = new HashMap<>();
+            final HashMap<String, String> accountIdCount = fetchAccountIdCount(totalRowForAccountIdCount, date);
+            sendEmail(dashboardMetricsList, totalRowForSuccessRateMetrics, successRateMetrics, totalRowForAccountIdCount, accountIdCount, date);
         }
+    }
+
+    private HashMap<String, String> fetchAccountIdCount(final HashMap<String, String> totalRow, LocalDate date) {
+        final Date startDate = getStartTimeOfToday(date);
+        final Date endDate = getEndTime(date);
+
+        final HashMap<String, Float> accountIdCountYesterday = (HashMap<String, Float>) customerAccountRepository.findCountOfDistinctAccountIdGroupByFipId(AccountLinkStatus.LINKED.toString(), startDate, endDate)
+                .stream().collect(Collectors.toMap((object -> object[0].toString()), (object -> Float.valueOf(object[1].toString()))));
+        totalRow.put(TOTAL, String.format("%.0f", accountIdCountYesterday.values().stream().reduce(0F, Float::sum)));
+
+        final HashMap<String, String> response = new HashMap<>();
+        accountIdCountYesterday.forEach((key, value) -> response.put(key, String.format("%.0f", value)));
+        return response;
+    }
+
+    private void sendEmail(final SortedMap<String, List<String>> dashboardMetrics,
+                           final SortedMap<String, List<String>> totalRowForSuccessRateMetrics,
+                           final SortedMap<String, List<String>> successRateMetrics,
+                           final HashMap<String, String> totalRowForAccountIdCount,
+                           final HashMap<String, String> accountIdCount,
+                           final LocalDate date) {
+        log.info("Sending Email");
+        sendHtmlMessage(dashboardMetrics, totalRowForSuccessRateMetrics, successRateMetrics, totalRowForAccountIdCount, accountIdCount, date);
+        log.info("Email Sent");
     }
 
     public Map<String, StatisticsTable> calculateDashboardStatistics(final LocalDate currentDate) {
@@ -189,7 +240,6 @@ public class PfmDashboardService implements CommandLineRunner {
         final long totalUniqueUsersPerMutualFundsInLast1FinancialYear = customerAccountRepository.totalUniqueUsersPerFiTypeInDateRange(MUTUAL_FUNDS, startTimeOfFYTD, endTime);
         statisticsTableDataList.put(TotalUsersDeposits1FinancialYear, new StatisticsTable(TotalUsersDeposits1FinancialYear, String.valueOf(totalUniqueUsersPerMutualFundsInLast1FinancialYear), currentTime));
 
-        writeStatisticsToCSV(statisticsTableDataList);
         log.info("Ending Dashboard Statistics Calculation for : {}", getStartTimeOfToday(currentDate));
 
         return statisticsTableDataList;
@@ -326,22 +376,28 @@ public class PfmDashboardService implements CommandLineRunner {
         return dailyMetricTableHashMap;
     }
 
-    private void sendEmail(final SortedMap<String, List<String>> dashboardMetrics, final LocalDate date) {
-        log.info("Sending Email");
-        sendHtmlMessage(dashboardMetrics, date);
-        log.info("Email Sent");
-    }
 
-    private void sendHtmlMessage(final SortedMap<String, List<String>> dashboardMetrics, final LocalDate date) {
+    private void sendHtmlMessage(final SortedMap<String, List<String>> dashboardMetrics,
+                                 final SortedMap<String, List<String>> totalRowForSuccessRateMetrics,
+                                 final SortedMap<String, List<String>> successRateMetrics,
+                                 final HashMap<String, String> totalRowForAccountIdCount,
+                                 final HashMap<String, String> accountIdCount,
+                                 final LocalDate date) {
         try {
             final MimeMessage message = emailSender.createMimeMessage();
             final MimeMessageHelper helper = new MimeMessageHelper(message, MimeMessageHelper.MULTIPART_MODE_MIXED_RELATED, StandardCharsets.UTF_8.name());
             final Context context = new Context();
             context.setVariable("dailyMetricsTableData", dashboardMetrics);
+            context.setVariable("dailyMetricsTableData", dashboardMetrics);
+            context.setVariable("successRateMetrics", successRateMetrics);
+            context.setVariable("accountIdCount", accountIdCount);
+            context.setVariable("totalRowForSuccessMetrics", totalRowForSuccessRateMetrics);
+            context.setVariable("totalRowForAccountIdCount", totalRowForAccountIdCount);
+
             context.setVariable("calculatedDate", date);
-            helper.setFrom("support@finfactor.in");
-            helper.setTo(new String[] { "mohitg@finfactor.in", "harshs@finfactor.in" });
-            helper.setSubject("PFM metrics - Axis - LIVE");
+            helper.setFrom(fromAddress);
+            helper.setTo(toAddresses);
+            helper.setSubject(subject);
 
             log.trace(Arrays.toString(message.getFrom()));
             log.trace(Arrays.toString(message.getAllRecipients()));
@@ -357,20 +413,42 @@ public class PfmDashboardService implements CommandLineRunner {
         }
     }
 
-    @Override
-    public void run(final String... args) throws Exception {
-        // Parse the command-line arguments to update startDate and endDate
-        for (final String arg : args) {
-            if (arg.startsWith("--startDate=")) {
-                final String date = arg.split("=")[1];
-                this.startDate = LocalDate.parse(date);
-            } else if (arg.startsWith("--endDate=")) {
-                final String date = arg.split("=")[1];
-                this.endDate = LocalDate.parse(date);
-            }
-        }
-        log.info("Updated Start Date: {}", startDate);
-        log.info("Updated End Date: {}", endDate);
-        init();
+    public SortedMap<String, List<String>> fetchSuccessRateMetrics(final SortedMap<String, List<String>> totalRow,
+                                                                   final LocalDate currentDate) {
+        final Date startDate = getStartTimeOfToday(currentDate);
+        final Date endDate = getEndTime(currentDate);
+
+        final Map<String, Float> totalAccountCounts = customerConsentSessionRepository.findCountOfAccountIdGroupByFIP(startDate, endDate)
+                .stream()
+                .filter(object -> object[0] != null)
+                .collect(Collectors.toMap(
+                        object -> object[0].toString(),
+                        object -> Float.valueOf(object[1].toString())
+                ));
+
+        final Map<String, Float> successfulAccountCounts = customerConsentSessionRepository.findBySessionStatusCountOfAccountIdGroupByFIP(
+                        ConsentSessionStatus.READY.toString(), startDate, endDate)
+                .stream()
+                .filter(object -> object[0] != null)
+                .collect(Collectors.toMap(
+                        object -> object[0].toString(),
+                        object -> Float.valueOf(object[1].toString())
+                ));
+
+
+        final SortedMap<String, List<String>> response = new TreeMap<>();
+        totalAccountCounts.forEach((fipId, count) -> {
+            response.put(fipId, new ArrayList<>());
+            response.get(fipId).add(String.format("%.0f", count));
+            response.get(fipId).add(String.format("%.0f", successfulAccountCounts.getOrDefault(fipId, 0F)));
+            response.get(fipId).add(String.format("%.2f", (successfulAccountCounts.getOrDefault(fipId, 0F).doubleValue() / count.doubleValue()) * 100));
+        });
+
+        totalRow.put(TOTAL, new ArrayList<>());
+        totalRow.get(TOTAL).add(String.format("%.0f", totalAccountCounts.values().stream().reduce(0F, Float::sum)));
+        totalRow.get(TOTAL).add(String.format("%.0f", successfulAccountCounts.values().stream().reduce(0F, Float::sum)));
+        totalRow.get(TOTAL).add(String.format("%.2f", (successfulAccountCounts.values().stream().reduce(0F, Float::sum) / totalAccountCounts.values().stream().reduce(0F, Float::sum)) * 100));
+
+        return response;
     }
 }

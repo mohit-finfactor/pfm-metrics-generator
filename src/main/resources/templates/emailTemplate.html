@@ -47,6 +47,66 @@
             </tbody>
         </table>
         <p>
+            Please find below the success rate for each FIP, calculated on <b> <span th:text="${calculatedDate}"></span> </b>
+        </p>
+        <p>
+
+        </p>
+        <table>
+            <thead>
+            <tr>
+                <th>FIP Name</th>
+                <th>Total Accounts</th>
+                <th>Fetch Successful</th>
+                <th>Success Rate</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr th:each="metric : ${#ctx.successRateMetrics}">
+                <td th:text="${metric.key}"></td>
+                <td th:text="${metric.value[0]}"></td>
+                <td th:text="${metric.value[1]}"></td>
+                <td th:text="${metric.value[2]}"></td>
+            </tr>
+            <tr th:each="metric : ${#ctx.totalRowForSuccessMetrics}">
+                <td th:text="${metric.key}"></td>
+                <td th:text="${metric.value[0]}"></td>
+                <td th:text="${metric.value[1]}"></td>
+                <td th:text="${metric.value[2]}"></td>
+            </tr>
+            </tbody>
+        </table>
+
+        <p>
+
+            Please find below the count of account id added yesterday for each FIP, calculated on <b> <span th:text="${calculatedDate}"></span> </b>
+
+
+        </p>
+
+        <table>
+            <thead>
+            <tr>
+                <th>FIP Name</th>
+                <th>Count of Account IDs</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr th:each="metric : ${#ctx.accountIdCount}">
+                <td th:text="${metric.key}"></td>
+                <td th:text="${metric.value}"></td>
+            </tr>
+            <tr th:each="metric : ${#ctx.totalRowForAccountIdCount}">
+                <td th:text="${metric.key}"></td>
+                <td th:text="${metric.value}"></td>
+            </tr>
+            </tbody>
+        </table>
+
+        <p>
+
+        </p>
+        <p>
             Regards, <br/>
             <em>The Finfactor Team</em>
         </p>
